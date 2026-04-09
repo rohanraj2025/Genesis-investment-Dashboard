@@ -319,10 +319,6 @@ def load_data(file_path):
     df.columns = [str(c).strip() for c in df.columns]
 
     startup_col = get_startup_column(df)
-    sector_col = get_sector_column(df)
-    incubator_col = get_incubator_column(df)
-    tier_col = get_tier_column(df)
-    stage_col = get_stage_column(df)
     funds_col = get_funds_column(df)
     rev_fy_col = get_rev_fy_column(df)
     rev_recent_col = get_rev_recent_column(df)
@@ -369,6 +365,9 @@ def load_data(file_path):
                 .replace({"nan": None, "None": None, "": None})
             )
 
+    if startup_col and startup_col in df.columns:
+        df = df[df[startup_col].notna()].copy()
+
     df["Funds Raised (Cr)"] = df["Funds Raised (Lakh)"] / 100
 
     return df
@@ -376,6 +375,35 @@ def load_data(file_path):
 
 def to_csv_download(df):
     return df.to_csv(index=False).encode("utf-8")
+
+
+def safe_range_filter(df, column_name, label, suffix):
+    if df.empty or column_name not in df.columns:
+        return df
+
+    series = pd.to_numeric(df[column_name], errors="coerce").dropna()
+    if series.empty:
+        st.sidebar.info(f"{label}: No valid data")
+        return df
+
+    min_val = float(series.min())
+    max_val = float(series.max())
+
+    if min_val < max_val:
+        selected_range = st.sidebar.slider(
+            label,
+            min_value=min_val,
+            max_value=max_val,
+            value=(min_val, max_val)
+        )
+    else:
+        st.sidebar.info(f"{label} fixed: {min_val:.2f} {suffix}")
+        selected_range = (min_val, max_val)
+
+    return df[
+        (pd.to_numeric(df[column_name], errors="coerce") >= selected_range[0]) &
+        (pd.to_numeric(df[column_name], errors="coerce") <= selected_range[1])
+    ]
 
 
 file_path = find_excel_file()
@@ -403,59 +431,45 @@ if "State" in filtered_df.columns:
     if selected_states:
         filtered_df = filtered_df[filtered_df["State"].isin(selected_states)]
 
-if sector_col:
+if sector_col and sector_col in filtered_df.columns:
     sector_options = sorted(filtered_df[sector_col].dropna().unique().tolist())
     selected_sectors = st.sidebar.multiselect("Filter by Sector", sector_options)
     if selected_sectors:
         filtered_df = filtered_df[filtered_df[sector_col].isin(selected_sectors)]
 
-if incubator_col:
+if incubator_col and incubator_col in filtered_df.columns:
     incubator_options = sorted(filtered_df[incubator_col].dropna().unique().tolist())
     selected_incubators = st.sidebar.multiselect("Filter by Incubator", incubator_options)
     if selected_incubators:
         filtered_df = filtered_df[filtered_df[incubator_col].isin(selected_incubators)]
 
-if stage_col:
+if stage_col and stage_col in filtered_df.columns:
     stage_options = sorted(filtered_df[stage_col].dropna().unique().tolist())
     selected_stages = st.sidebar.multiselect("Filter by Stage", stage_options)
     if selected_stages:
         filtered_df = filtered_df[filtered_df[stage_col].isin(selected_stages)]
 
-if tier_col:
+if tier_col and tier_col in filtered_df.columns:
     tier_options = sorted(filtered_df[tier_col].dropna().unique().tolist())
     selected_tiers = st.sidebar.multiselect("Filter by Tier", tier_options)
     if selected_tiers:
         filtered_df = filtered_df[filtered_df[tier_col].isin(selected_tiers)]
 
-if not filtered_df.empty:
-    min_fund = float(filtered_df["Funds Raised (Lakh)"].min())
-    max_fund = float(filtered_df["Funds Raised (Lakh)"].max())
-    fund_range = st.sidebar.slider(
-        "Funding Range (Lakh)",
-        min_value=float(min_fund),
-        max_value=float(max_fund),
-        value=(float(min_fund), float(max_fund))
-    )
-    filtered_df = filtered_df[
-        (filtered_df["Funds Raised (Lakh)"] >= fund_range[0]) &
-        (filtered_df["Funds Raised (Lakh)"] <= fund_range[1])
-    ]
+filtered_df = safe_range_filter(
+    filtered_df,
+    "Funds Raised (Lakh)",
+    "Funding Range (Lakh)",
+    "Lakh"
+)
 
-if not filtered_df.empty:
-    min_rev = float(filtered_df["Revenue Apr25-Feb26 (Cr)"].min())
-    max_rev = float(filtered_df["Revenue Apr25-Feb26 (Cr)"].max())
-    rev_range = st.sidebar.slider(
-        "Revenue Range (Cr)",
-        min_value=float(min_rev),
-        max_value=float(max_rev),
-        value=(float(min_rev), float(max_rev))
-    )
-    filtered_df = filtered_df[
-        (filtered_df["Revenue Apr25-Feb26 (Cr)"] >= rev_range[0]) &
-        (filtered_df["Revenue Apr25-Feb26 (Cr)"] <= rev_range[1])
-    ]
+filtered_df = safe_range_filter(
+    filtered_df,
+    "Revenue Apr25-Feb26 (Cr)",
+    "Revenue Range (Cr)",
+    "Cr"
+)
 
-if startup_col:
+if startup_col and startup_col in filtered_df.columns:
     startup_search = st.sidebar.text_input("Search Startup")
     if startup_search:
         filtered_df = filtered_df[
@@ -464,7 +478,11 @@ if startup_col:
 
 top_n = st.sidebar.slider("Top N for charts", 5, 20, 10)
 
-if startup_col:
+if filtered_df.empty:
+    st.warning("No data available for selected filters.")
+    st.stop()
+
+if startup_col and startup_col in filtered_df.columns:
     total_startups = filtered_df[startup_col].dropna().nunique()
 else:
     total_startups = len(filtered_df)
@@ -475,7 +493,11 @@ rev_fy = filtered_df["Revenue FY24-25 (Cr)"].sum()
 rev_recent = filtered_df["Revenue Apr25-Feb26 (Cr)"].sum()
 total_customers = filtered_df["Total Customers"].sum()
 employment = filtered_df["Employment Generated"].sum()
-customers_served = customers_served_value(filtered_df["Customers Served"]) if "Customers Served" in filtered_df.columns else "No Data"
+
+if "Customers Served" in filtered_df.columns:
+    customers_served = customers_served_value(filtered_df["Customers Served"])
+else:
+    customers_served = "No Data"
 
 avg_funding_cr = total_funds_cr / total_startups if total_startups else 0
 avg_revenue_cr = rev_recent / total_startups if total_startups else 0
@@ -561,19 +583,20 @@ with tab1:
                 .sort_values("Startup Count", ascending=False)
                 .head(top_n)
             )
-            fig_state = px.bar(
-                state_df,
-                x="State",
-                y="Startup Count",
-                text="Startup Count",
-                title=f"Top {top_n} States by Startup Count"
-            )
-            fig_state.update_traces(
-                texttemplate="%{y:.0f}",
-                hovertemplate="<b>%{x}</b><br>Startup Count: %{y:.0f}<extra></extra>"
-            )
-            fig_state.update_layout(height=430, title_x=0)
-            st.plotly_chart(fig_state, use_container_width=True)
+            if not state_df.empty:
+                fig_state = px.bar(
+                    state_df,
+                    x="State",
+                    y="Startup Count",
+                    text="Startup Count",
+                    title=f"Top {top_n} States by Startup Count"
+                )
+                fig_state.update_traces(
+                    texttemplate="%{y:.0f}",
+                    hovertemplate="<b>%{x}</b><br>Startup Count: %{y:.0f}<extra></extra>"
+                )
+                fig_state.update_layout(height=430, title_x=0)
+                st.plotly_chart(fig_state, use_container_width=True)
 
     with ch2:
         if sector_col and startup_col and not filtered_df.empty:
@@ -584,19 +607,20 @@ with tab1:
                 .sort_values("Startup Count", ascending=False)
                 .head(top_n)
             )
-            fig_sector = px.pie(
-                sector_df,
-                names=sector_col,
-                values="Startup Count",
-                hole=0.5,
-                title="Sector-wise Startup Distribution"
-            )
-            fig_sector.update_traces(
-                texttemplate="%{percent:.1%}",
-                hovertemplate="<b>%{label}</b><br>Startup Count: %{value:.0f}<br>Share: %{percent}<extra></extra>"
-            )
-            fig_sector.update_layout(height=430, title_x=0)
-            st.plotly_chart(fig_sector, use_container_width=True)
+            if not sector_df.empty:
+                fig_sector = px.pie(
+                    sector_df,
+                    names=sector_col,
+                    values="Startup Count",
+                    hole=0.5,
+                    title="Sector-wise Startup Distribution"
+                )
+                fig_sector.update_traces(
+                    texttemplate="%{percent:.1%}",
+                    hovertemplate="<b>%{label}</b><br>Startup Count: %{value:.0f}<br>Share: %{percent}<extra></extra>"
+                )
+                fig_sector.update_layout(height=430, title_x=0)
+                st.plotly_chart(fig_sector, use_container_width=True)
 
 with tab2:
     st.markdown('<div class="section-header">Funding and Revenue Analysis</div>', unsafe_allow_html=True)
@@ -613,27 +637,28 @@ with tab2:
                 .head(top_n)
             )
 
-            fig_fund_state = px.bar(
-                fund_state_df,
-                x="Funds Raised (Cr)",
-                y="State",
-                orientation="h",
-                text="Funds Raised (Cr)",
-                title=f"Top {top_n} States by Funds Raised (Cr)"
-            )
+            if not fund_state_df.empty:
+                fig_fund_state = px.bar(
+                    fund_state_df,
+                    x="Funds Raised (Cr)",
+                    y="State",
+                    orientation="h",
+                    text="Funds Raised (Cr)",
+                    title=f"Top {top_n} States by Funds Raised (Cr)"
+                )
 
-            fig_fund_state.update_traces(
-                texttemplate="%{x:.2f}",
-                hovertemplate="<b>%{y}</b><br>Funds Raised: %{x:.2f} Cr<extra></extra>"
-            )
+                fig_fund_state.update_traces(
+                    texttemplate="%{x:.2f}",
+                    hovertemplate="<b>%{y}</b><br>Funds Raised: %{x:.2f} Cr<extra></extra>"
+                )
 
-            fig_fund_state.update_layout(
-                height=430,
-                title_x=0,
-                yaxis={'categoryorder': 'total ascending'}
-            )
+                fig_fund_state.update_layout(
+                    height=430,
+                    title_x=0,
+                    yaxis={'categoryorder': 'total ascending'}
+                )
 
-            st.plotly_chart(fig_fund_state, use_container_width=True)
+                st.plotly_chart(fig_fund_state, use_container_width=True)
 
     with fr2:
         if sector_col and not filtered_df.empty:
@@ -645,41 +670,45 @@ with tab2:
                 .head(top_n)
             )
 
-            fig_fund_sector = px.pie(
-                fund_sector_df,
-                names=sector_col,
-                values="Funds Raised (Cr)",
-                hole=0.5,
-                title="Sector-wise Funding Share (Cr)"
-            )
+            if not fund_sector_df.empty:
+                fig_fund_sector = px.pie(
+                    fund_sector_df,
+                    names=sector_col,
+                    values="Funds Raised (Cr)",
+                    hole=0.5,
+                    title="Sector-wise Funding Share (Cr)"
+                )
 
-            fig_fund_sector.update_traces(
-                texttemplate="%{percent:.1%}",
-                hovertemplate="<b>%{label}</b><br>Funds Raised: %{value:.2f} Cr<br>Share: %{percent}<extra></extra>"
-            )
+                fig_fund_sector.update_traces(
+                    texttemplate="%{percent:.1%}",
+                    hovertemplate="<b>%{label}</b><br>Funds Raised: %{value:.2f} Cr<br>Share: %{percent}<extra></extra>"
+                )
 
-            fig_fund_sector.update_layout(height=430, title_x=0)
+                fig_fund_sector.update_layout(height=430, title_x=0)
 
-            st.plotly_chart(fig_fund_sector, use_container_width=True)
+                st.plotly_chart(fig_fund_sector, use_container_width=True)
 
     fr3, fr4 = st.columns(2)
 
     with fr3:
         if startup_col and not filtered_df.empty:
             scatter_df = filtered_df[[startup_col, "Funds Raised (Cr)", "Revenue Apr25-Feb26 (Cr)"]].copy()
-            fig_scatter = px.scatter(
-                scatter_df,
-                x="Funds Raised (Cr)",
-                y="Revenue Apr25-Feb26 (Cr)",
-                hover_name=startup_col,
-                size="Revenue Apr25-Feb26 (Cr)",
-                title="Revenue vs Funds Raised"
-            )
-            fig_scatter.update_traces(
-                hovertemplate="<b>%{hovertext}</b><br>Funds Raised: %{x:.2f} Cr<br>Revenue: %{y:.2f} Cr<extra></extra>"
-            )
-            fig_scatter.update_layout(height=430, title_x=0)
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            scatter_df = scatter_df.dropna(subset=["Funds Raised (Cr)", "Revenue Apr25-Feb26 (Cr)"])
+
+            if not scatter_df.empty:
+                fig_scatter = px.scatter(
+                    scatter_df,
+                    x="Funds Raised (Cr)",
+                    y="Revenue Apr25-Feb26 (Cr)",
+                    hover_name=startup_col,
+                    size="Revenue Apr25-Feb26 (Cr)",
+                    title="Revenue vs Funds Raised"
+                )
+                fig_scatter.update_traces(
+                    hovertemplate="<b>%{hovertext}</b><br>Funds Raised: %{x:.2f} Cr<br>Revenue: %{y:.2f} Cr<extra></extra>"
+                )
+                fig_scatter.update_layout(height=430, title_x=0)
+                st.plotly_chart(fig_scatter, use_container_width=True)
 
     with fr4:
         if startup_col and not filtered_df.empty:
@@ -691,27 +720,28 @@ with tab2:
                 .head(top_n)
             )
 
-            fig_top_rev = px.bar(
-                top_rev_df,
-                x="Revenue Apr25-Feb26 (Cr)",
-                y=startup_col,
-                orientation="h",
-                text="Revenue Apr25-Feb26 (Cr)",
-                title=f"Top {top_n} Startups by Revenue (Cr)"
-            )
+            if not top_rev_df.empty:
+                fig_top_rev = px.bar(
+                    top_rev_df,
+                    x="Revenue Apr25-Feb26 (Cr)",
+                    y=startup_col,
+                    orientation="h",
+                    text="Revenue Apr25-Feb26 (Cr)",
+                    title=f"Top {top_n} Startups by Revenue (Cr)"
+                )
 
-            fig_top_rev.update_traces(
-                texttemplate="%{x:.2f}",
-                hovertemplate="<b>%{y}</b><br>Revenue: %{x:.2f} Cr<extra></extra>"
-            )
+                fig_top_rev.update_traces(
+                    texttemplate="%{x:.2f}",
+                    hovertemplate="<b>%{y}</b><br>Revenue: %{x:.2f} Cr<extra></extra>"
+                )
 
-            fig_top_rev.update_layout(
-                height=430,
-                title_x=0,
-                yaxis={'categoryorder': 'total ascending'}
-            )
+                fig_top_rev.update_layout(
+                    height=430,
+                    title_x=0,
+                    yaxis={'categoryorder': 'total ascending'}
+                )
 
-            st.plotly_chart(fig_top_rev, use_container_width=True)
+                st.plotly_chart(fig_top_rev, use_container_width=True)
 
 with tab3:
     st.markdown('<div class="section-header">Incubator Performance Analysis</div>', unsafe_allow_html=True)
@@ -775,7 +805,9 @@ with tab4:
                 leaderboard_cols.append(col)
 
         leaderboard_df = filtered_df[leaderboard_cols].copy()
-        leaderboard_df = leaderboard_df.sort_values("Revenue Apr25-Feb26 (Cr)", ascending=False)
+
+        if "Revenue Apr25-Feb26 (Cr)" in leaderboard_df.columns:
+            leaderboard_df = leaderboard_df.sort_values("Revenue Apr25-Feb26 (Cr)", ascending=False)
 
         for col in ["Funds Raised (Lakh)", "Funds Raised (Cr)", "Revenue FY24-25 (Cr)", "Revenue Apr25-Feb26 (Cr)"]:
             if col in leaderboard_df.columns:
